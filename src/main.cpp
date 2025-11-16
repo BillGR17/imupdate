@@ -295,6 +295,9 @@ int main() {
   switch (Button) {
   case 2: // Middle click
     showUpdateGui();
+    checkUpdates();
+    Updates = getLineCount("/tmp/updates_list");
+    std::cout << Updates << std::endl;
     break;
   default: // Left click or i3blocks execution
     checkUpdates();
