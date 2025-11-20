@@ -202,27 +202,47 @@ void showUpdateGui() {
                    ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
 
-      // Control buttons
+      // State for the password input
+      static char Password[128] = "";
+
+      // Disable interaction if an update is already running
       ImGui::BeginDisabled(UpdateRunning);
+
+      // Password Input Field
+      ImGui::Text("Sudo Password:");
+      ImGui::SameLine();
+      // Set specific width for the input box
+      ImGui::SetNextItemWidth(200);
+      // ImGuiInputTextFlags_Password masks the characters with asterisks
+      ImGui::InputText("##password", Password, std::size(Password), ImGuiInputTextFlags_Password);
+
+      ImGui::SameLine();
+
       if (ImGui::Button("Update")) {
         if (!UpdateRunning) {
-          // Start the output buffer with the initial list
           LiveOutputBuffer = InitialUpdateList;
-
           UpdateRunning = true;
           UpdateFinished = false;
 
-          // Execute with pkexec for root privileges via Polkit
-          // 2>&1 redirects stderr to stdout
-          UpdatePipe.reset(popen("pkexec paru -Syu --noconfirm 2>&1", "r"));
+          // Construct the command chain:
+          // 1. echo 'PASSWORD' | sudo -S -v : Feeds the password to sudo to validate credentials via stdin.
+          // 2. && : Only proceeds if the sudo validation succeeds.
+          // 3. stdbuf -oL paru ... : Runs paru. Since sudo is now cached/validated, paru won't prompt again.
+          std::string Cmd = "echo '" + std::string(Password) + "' | sudo -S -v && stdbuf -oL paru -Syu --noconfirm 2>&1";
+
+          // Open the pipe with the combined command
+          UpdatePipe.reset(popen(Cmd.c_str(), "r"));
 
           if (!UpdatePipe) {
-            LiveOutputBuffer += "Failed to execute command with popen().";
+            LiveOutputBuffer += "Failed to execute command via popen().";
             UpdateRunning = false;
           } else {
-            // Set the pipe to non-blocking mode
+            // Set the pipe to non-blocking mode to allow the UI to remain responsive
             PipeFD = fileno(UpdatePipe.get());
             fcntl(PipeFD, F_SETFL, O_NONBLOCK);
+
+            // Optional: Clear the password buffer after sending it for security
+            // Password[0] = '\0';
           }
         }
       }
@@ -253,7 +273,6 @@ void showUpdateGui() {
       ImGui::EndChild();
       ImGui::End();
     }
-
     // --- 6d. Render ---
     int DisplayW, DisplayH;
     glfwGetFramebufferSize(Window, &DisplayW, &DisplayH);
@@ -295,9 +314,6 @@ int main() {
   switch (Button) {
   case 2: // Middle click
     showUpdateGui();
-    checkUpdates();
-    Updates = getLineCount("/tmp/updates_list");
-    std::cout << Updates << std::endl;
     break;
   default: // Left click or i3blocks execution
     checkUpdates();
