@@ -170,11 +170,24 @@ void showUpdateGui() {
         TmpBuffer[BytesRead] = '\0';
         LiveOutputBuffer += TmpBuffer.data();
       } else if (BytesRead == 0) {
-        // End-of-File (EOF), the command finished
-        UpdatePipe.reset(); // Automatically calls pclose()
+        // End-of-File (EOF) - The command has finished execution.
+        // Release ownership of the FILE pointer so we can manually close it
+        // and retrieve the exit code.
+        FILE *RawPipe = UpdatePipe.release();
+        int ExitStatus = pclose(RawPipe);
+
         UpdateRunning = false;
         UpdateFinished = true;
-        LiveOutputBuffer += "\n\n--- UPDATE FINISHED ---";
+
+        // In Unix, an exit status of 0 usually means success.
+        // Any other number indicates an error (e.g., 1 = Permission denied/Wrong Password).
+        if (ExitStatus == 0) {
+          LiveOutputBuffer += "\n\n--- UPDATE FINISHED ---";
+        } else {
+          LiveOutputBuffer += "\n\n--- UPDATE FAILED ---";
+          LiveOutputBuffer += "\n(Exit Code: " + std::to_string(ExitStatus) + ")";
+          LiveOutputBuffer += "\nPossible causes: Wrong password or network issue.";
+        }
       } else {
         // Error or temporarily no data (EAGAIN / EWOULDBLOCK)
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
