@@ -228,7 +228,7 @@ void showUpdateGui() {
           // 1. echo 'PASSWORD' | sudo -S -v : Feeds the password to sudo to validate credentials via stdin.
           // 2. && : Only proceeds if the sudo validation succeeds.
           // 3. stdbuf -oL paru ... : Runs paru. Since sudo is now cached/validated, paru won't prompt again.
-          std::string Cmd = "echo '" + std::string(Password) + "' | sudo -S -v && stdbuf -oL paru -Syu --noconfirm 2>&1";
+          std::string Cmd = "echo '" + std::string(Password) + "' | sudo -S sh -c 'stdbuf -oL paru -Syu --noconfirm 2>&1'";
 
           // Open the pipe with the combined command
           UpdatePipe.reset(popen(Cmd.c_str(), "r"));
@@ -314,6 +314,9 @@ int main() {
   switch (Button) {
   case 2: // Middle click
     showUpdateGui();
+    checkUpdates();
+    Updates = getLineCount("/tmp/updates_list");
+    std::cout << Updates << std::endl;
     break;
   default: // Left click or i3blocks execution
     checkUpdates();
