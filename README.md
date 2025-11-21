@@ -18,7 +18,6 @@ The application has two modes, triggered by the BLOCK\_BUTTON environment variab
    * It first loads and displays the list of updates from /tmp/updates\_list.  
    * It provides two buttons: "Update" and "Close".  
    * If you click **"Update"**:  
-     * It securely requests administrator privileges using **Polkit (pkexec)**. This will show your system's native password prompt (the pop-up).  
      * It executes pkexec paru \-Syu 2\>&1 to run the full system upgrade.  
      * It captures the live stdout and stderr from paru *as it runs*.  
      * It streams this live output directly into the ImGui window, so you can see the update progress in real-time without a separate terminal.  
@@ -33,8 +32,6 @@ To build and run this application, you need:
 * glfw-x11  
 * imgui  
 * paru  
-* polkit  
-* A Polkit authentication agent running (e.g., polkit-gnome) to get the graphical password prompt.  
 * noto-fonts (the path /usr/share/fonts/noto/NotoSans-Regular.ttf is hardcoded).
 
 ## **Example i3blocks Configuration**
