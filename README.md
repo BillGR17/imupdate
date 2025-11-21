@@ -35,8 +35,9 @@ To build and run this application, you need:
 * noto-fonts (the path /usr/share/fonts/noto/NotoSans-Regular.ttf is hardcoded).
 
 ## **Example i3blocks Configuration**
-
-\[updater\]  
+```
+[updater]  
 command=/path/to/your/build/imupdate  
-interval=1800 \# Check every 30 minutes  
-signal=10  
+interval=1800 # Check every 30 minutes  
+signal=10 
+```
