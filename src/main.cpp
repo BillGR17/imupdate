@@ -6,9 +6,11 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem> // C++17/20 for permissions and file handling
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <random> // For random filename generation
 #include <sstream>
 #include <string>
 
@@ -17,6 +19,8 @@
 #include <unistd.h>
 
 #include <regex>
+
+namespace fs = std::filesystem;
 
 /**
  * @brief Executes a shell command and captures its stdout.
@@ -117,7 +121,7 @@ void showUpdateGui() {
   glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
   // --- 2. Create Window ---
-  GLFWwindow *Window = glfwCreateWindow(400, 400, "Update Manager", nullptr, nullptr);
+  GLFWwindow *Window = glfwCreateWindow(800, 600, "Update Manager", nullptr, nullptr);
   if (Window == nullptr) {
     std::cerr << "Failed to create GLFW window" << std::endl;
     glfwTerminate();
@@ -131,7 +135,6 @@ void showUpdateGui() {
   ImGuiIO &io = ImGui::GetIO();
 
   // Disable saving/loading of imgui.ini
-  // (We don't want to save the window state)
   io.IniFilename = NULL;
 
   // Load custom font
@@ -154,6 +157,9 @@ void showUpdateGui() {
   static bool UpdateFinished = false; // Has the update finished?
   static int PipeFD = -1;             // File Descriptor of the output pipe
 
+  // Keep track of the temp file to ensure deletion
+  static std::string CurrentTempFile = "";
+
   // --- 6. Main Application Loop ---
   while (!glfwWindowShouldClose(Window)) {
     glfwPollEvents();
@@ -166,21 +172,35 @@ void showUpdateGui() {
       ssize_t BytesRead = read(PipeFD, TmpBuffer.data(), TmpBuffer.size() - 1);
 
       if (BytesRead > 0) {
-        // New data arrived, append to buffer
+        // New data arrived
         TmpBuffer[BytesRead] = '\0';
-        LiveOutputBuffer += TmpBuffer.data();
+        std::string RawChunk = TmpBuffer.data();
+
+        // 1. Regex to strip ANSI escape codes (colors, cursor movements, etc.)
+        // This removes [25l, [1E, colors, etc.
+        static const std::regex AnsiRegex(R"(\x1B\[[0-9;?]*[a-zA-Z])");
+        std::string CleanChunk = std::regex_replace(RawChunk, AnsiRegex, "");
+
+        // 2. Remove Carriage Returns (\r) and null bytes
+        std::erase(CleanChunk, '\r');
+        std::erase(CleanChunk, '\0');
+
+        LiveOutputBuffer += CleanChunk;
+
       } else if (BytesRead == 0) {
         // End-of-File (EOF) - The command has finished execution.
-        // Release ownership of the FILE pointer so we can manually close it
-        // and retrieve the exit code.
         FILE *RawPipe = UpdatePipe.release();
         int ExitStatus = pclose(RawPipe);
 
         UpdateRunning = false;
         UpdateFinished = true;
 
-        // In Unix, an exit status of 0 usually means success.
-        // Any other number indicates an error (e.g., 1 = Permission denied/Wrong Password).
+        // Ensure temp file is deleted even if the shell command failed to do so
+        if (!CurrentTempFile.empty() && fs::exists(CurrentTempFile)) {
+          fs::remove(CurrentTempFile);
+          CurrentTempFile = "";
+        }
+
         if (ExitStatus == 0) {
           LiveOutputBuffer += "\n\n--- UPDATE FINISHED ---";
         } else {
@@ -189,15 +209,17 @@ void showUpdateGui() {
           LiveOutputBuffer += "\nPossible causes: Wrong password or network issue.";
         }
       } else {
-        // Error or temporarily no data (EAGAIN / EWOULDBLOCK)
+        // Error or temporarily no data
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          // A real error occurred
           LiveOutputBuffer += "\n\n--- ERROR READING PIPE ---";
           UpdatePipe.reset();
           UpdateRunning = false;
           UpdateFinished = true;
+          // Fallback cleanup
+          if (!CurrentTempFile.empty() && fs::exists(CurrentTempFile)) {
+            fs::remove(CurrentTempFile);
+          }
         }
-        // Otherwise, just no data *right now*. Continue.
       }
     }
 
@@ -208,25 +230,19 @@ void showUpdateGui() {
 
     // --- 6c. Draw the UI ---
     {
-      // Create a fullscreen ImGui window
       ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
       ImGui::SetNextWindowSize(io.DisplaySize);
       ImGui::Begin("Update Window", nullptr,
                    ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
 
-      // State for the password input
       static char Password[128] = "";
 
-      // Disable interaction if an update is already running
       ImGui::BeginDisabled(UpdateRunning);
 
-      // Password Input Field
-      ImGui::Text("Sudo Password:");
+      ImGui::Text("Password:");
       ImGui::SameLine();
-      // Set specific width for the input box
-      ImGui::SetNextItemWidth(200);
-      // ImGuiInputTextFlags_Password masks the characters with asterisks
+      ImGui::SetNextItemWidth(100);
       ImGui::InputText("##password", Password, std::size(Password), ImGuiInputTextFlags_Password);
 
       ImGui::SameLine();
@@ -237,25 +253,52 @@ void showUpdateGui() {
           UpdateRunning = true;
           UpdateFinished = false;
 
-          // Construct the command chain:
-          // 1. echo 'PASSWORD' | sudo -S -v : Feeds the password to sudo to validate credentials via stdin.
-          // 2. && : Only proceeds if the sudo validation succeeds.
-          // 3. stdbuf -oL paru ... : Runs paru. Since sudo is now cached/validated, paru won't prompt again.
-          std::string Cmd = "echo '" + std::string(Password) + "' | sudo -S sh -c 'stdbuf -oL paru -Syu --noconfirm 2>&1'";
+          // 1. Generate a random temporary filename
+          std::random_device RD;
+          std::mt19937 Gen(RD());
+          std::uniform_int_distribution<> Dis(10000, 99999);
+          CurrentTempFile = "/tmp/imupdate_pass_" + std::to_string(Dis(Gen));
 
-          // Open the pipe with the combined command
-          UpdatePipe.reset(popen(Cmd.c_str(), "r"));
+          // 2. Write password to the temp file securely
+          {
+            std::ofstream PassFile(CurrentTempFile);
+            if (PassFile.is_open()) {
+              PassFile << Password;
+              PassFile.close();
+              // Set permissions to 600 (Owner Read/Write ONLY) using C++17 filesystem
+              fs::permissions(CurrentTempFile, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace);
+            } else {
+              LiveOutputBuffer = "Error: Could not create temp password file.";
+              UpdateRunning = false;
+            }
+          }
 
-          if (!UpdatePipe) {
-            LiveOutputBuffer += "Failed to execute command via popen().";
-            UpdateRunning = false;
-          } else {
-            // Set the pipe to non-blocking mode to allow the UI to remain responsive
-            PipeFD = fileno(UpdatePipe.get());
-            fcntl(PipeFD, F_SETFL, O_NONBLOCK);
+          if (UpdateRunning) {
+            // 3. Construct the command
+            // - script: provides fake TTY for sudo
+            // - sudo -S -v < file: Reads pass from file, validates credentials
+            // - rm file: deletes file immediately
+            // - paru ... --noprogressbar: Runs update without garbage output
+            std::string InnerCmd = "sudo -S -v < " + CurrentTempFile + " && rm " + CurrentTempFile +
+                                   " && stdbuf -oL paru -Syu --noconfirm --color=never --noprogressbar 2>&1";
 
-            // Optional: Clear the password buffer after sending it for security
-            // Password[0] = '\0';
+            std::string Cmd = "script -q -e -c \"" + InnerCmd + "\" /dev/null";
+
+            UpdatePipe.reset(popen(Cmd.c_str(), "r"));
+
+            if (!UpdatePipe) {
+              LiveOutputBuffer += "Failed to execute command via popen().";
+              UpdateRunning = false;
+              // Cleanup if popen fails
+              if (fs::exists(CurrentTempFile))
+                fs::remove(CurrentTempFile);
+            } else {
+              PipeFD = fileno(UpdatePipe.get());
+              fcntl(PipeFD, F_SETFL, O_NONBLOCK);
+
+              // Clear password from memory for better security
+              // memset(Password, 0, sizeof(Password));
+            }
           }
         }
       }
@@ -263,13 +306,16 @@ void showUpdateGui() {
 
       ImGui::SameLine();
       if (ImGui::Button("Close")) {
+        // Ensure cleanup on exit
+        if (!CurrentTempFile.empty() && fs::exists(CurrentTempFile)) {
+          fs::remove(CurrentTempFile);
+        }
         glfwSetWindowShouldClose(Window, true);
       }
 
       ImGui::Separator();
       ImGui::Text("Output:");
 
-      // Scrolling output region
       ImGui::BeginChild("OutputRegion", ImVec2(0, 0), true, ImGuiWindowFlags_HorizontalScrollbar);
 
       if (LiveOutputBuffer.empty()) {
@@ -278,7 +324,6 @@ void showUpdateGui() {
         ImGui::TextUnformatted(LiveOutputBuffer.c_str());
       }
 
-      // Auto-scroll to bottom
       if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
         ImGui::SetScrollHereY(1.0f);
       }
@@ -286,6 +331,7 @@ void showUpdateGui() {
       ImGui::EndChild();
       ImGui::End();
     }
+
     // --- 6d. Render ---
     int DisplayW, DisplayH;
     glfwGetFramebufferSize(Window, &DisplayW, &DisplayH);
@@ -300,6 +346,11 @@ void showUpdateGui() {
   }
 
   // --- 7. Cleanup ---
+  // Final safeguard cleanup
+  if (!CurrentTempFile.empty() && fs::exists(CurrentTempFile)) {
+    fs::remove(CurrentTempFile);
+  }
+
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();
@@ -309,10 +360,6 @@ void showUpdateGui() {
 
 /**
  * @brief Main entry point for the program.
- *
- * Checks the 'BLOCK_BUTTON' environment variable (from i3blocks).
- * - '2' (Middle click): Opens the GUI.
- * - 'default' (Left/No click): Prints the update count to stdout.
  */
 int main() {
   const char *Env = getenv("BLOCK_BUTTON");
