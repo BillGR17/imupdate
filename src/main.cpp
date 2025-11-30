@@ -4,39 +4,46 @@
 #include "imgui_impl_opengl3.h"
 
 #include <array>
+#include <atomic>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
-#include <filesystem> // C++17/20 for permissions and file handling
+#include <fcntl.h>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
-#include <random> // For random filename generation
+#include <mutex>
+#include <random>
+#include <regex>
 #include <sstream>
 #include <string>
-
-#include <cerrno>
-#include <fcntl.h>
+#include <thread>
 #include <unistd.h>
-
-#include <regex>
+#include <vector>
 
 namespace fs = std::filesystem;
 
+// --- Shared Resources for Threading ---
+struct AsyncUpdateState {
+  std::string PendingOutput; // Buffer for data ready to be shown in UI
+  std::mutex OutputMutex;    // Protects PendingOutput
+  std::atomic<bool> IsRunning{false};
+  std::atomic<bool> IsFinished{false};
+  std::atomic<int> ExitCode{0};
+};
+
 /**
  * @brief Executes a shell command and captures its stdout.
- * @param Cmd The command to execute (C-style string).
- * @return The standard output (stdout) of the command as an std::string.
  */
 std::string executeCommand(const char *Cmd) {
   std::array<char, 128> Buffer;
   std::string Result = "";
-  // Use popen to execute and open a read pipe
   std::unique_ptr<FILE, decltype(&pclose)> Pipe(popen(Cmd, "r"), pclose);
   if (!Pipe) {
     std::cerr << "popen() failed for command: " << Cmd << std::endl;
     return "";
   }
-  // Read the output chunk by chunk
   while (fgets(Buffer.data(), Buffer.size(), Pipe.get()) != nullptr) {
     Result += Buffer.data();
   }
@@ -45,16 +52,12 @@ std::string executeCommand(const char *Cmd) {
 
 /**
  * @brief Checks for system updates (pacman & AUR).
- *
- * Runs 'checkupdates' and 'paru -Qua', strips the output
- * of ANSI color codes, and writes the result to /tmp/updates_list.
  */
 void checkUpdates() {
   std::string UpdateList = "";
   UpdateList += executeCommand("checkupdates");
   UpdateList += executeCommand("paru -Qua");
 
-  // Remove ANSI color codes from the output
   static const std::regex AnsiRegex("\x1B\\[[0-9;]*[mK]");
   std::string CleanUpdateList = std::regex_replace(UpdateList, AnsiRegex, "");
 
@@ -63,17 +66,11 @@ void checkUpdates() {
     std::cerr << "Error writing to /tmp/updates_list" << std::endl;
     exit(EXIT_FAILURE);
   }
-  // Write the "clean" list to the file
   OutFile << CleanUpdateList;
 }
 
 /**
  * @brief Counts the number of lines in a file.
- *
- * Used primarily for the default (i3blocks) execution
- * to show the *number* of updates.
- * @param Filename The path to the file.
- * @return The number of lines.
  */
 int getLineCount(const std::string &Filename) {
   std::ifstream File(Filename);
@@ -91,8 +88,6 @@ int getLineCount(const std::string &Filename) {
 
 /**
  * @brief Reads the entire content of a file into an std::string.
- * @param Filename The path to the file.
- * @return The content of the file.
  */
 std::string readFile(const std::string &Filename) {
   std::ifstream File(Filename);
@@ -105,22 +100,63 @@ std::string readFile(const std::string &Filename) {
 }
 
 /**
+ * @brief Worker function that runs in a separate thread.
+ * Handles the execution, reading, cleaning, and queuing of output.
+ */
+void updateWorker(std::string Cmd, AsyncUpdateState *State) {
+  // Open pipe in blocking mode (default for popen)
+  // We do NOT need O_NONBLOCK here because we are in a background thread.
+  // Blocking read is more CPU efficient.
+  FILE *Pipe = popen(Cmd.c_str(), "r");
+
+  if (!Pipe) {
+    std::lock_guard<std::mutex> Lock(State->OutputMutex);
+    State->PendingOutput += "Error: Failed to launch update command.\n";
+    State->IsRunning = false;
+    State->IsFinished = true;
+    State->ExitCode = -1;
+    return;
+  }
+
+  std::array<char, 1024> Buffer;
+  // Compile regex once
+  static const std::regex AnsiRegex(R"(\x1B\[[0-9;?]*[a-zA-Z])");
+
+  while (fgets(Buffer.data(), Buffer.size(), Pipe) != nullptr) {
+    std::string RawChunk = Buffer.data();
+
+    // Clean output (Heavy regex operation happens here, off main thread)
+    std::string CleanChunk = std::regex_replace(RawChunk, AnsiRegex, "");
+    std::erase(CleanChunk, '\r');
+    std::erase(CleanChunk, '\0');
+
+    // Send to UI
+    if (!CleanChunk.empty()) {
+      std::lock_guard<std::mutex> Lock(State->OutputMutex);
+      State->PendingOutput += CleanChunk;
+    }
+  }
+
+  int Status = pclose(Pipe);
+  State->ExitCode = Status;
+  State->IsRunning = false;
+  State->IsFinished = true;
+}
+
+/**
  * @brief Initializes and displays the GUI (ImGui) window for updates.
  */
 void showUpdateGui() {
-  // --- 1. Initialize GLFW ---
   if (!glfwInit()) {
     std::cerr << "Failed to initialize GLFW" << std::endl;
     exit(EXIT_FAILURE);
   }
 
-  // Set window hints (OpenGL 3.3 Core)
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
   glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
-  // --- 2. Create Window ---
   GLFWwindow *Window = glfwCreateWindow(800, 600, "Update Manager", nullptr, nullptr);
   if (Window == nullptr) {
     std::cerr << "Failed to create GLFW window" << std::endl;
@@ -128,16 +164,12 @@ void showUpdateGui() {
     exit(EXIT_FAILURE);
   }
   glfwMakeContextCurrent(Window);
-  glfwSwapInterval(1); // Enable VSync
+  glfwSwapInterval(1);
 
-  // --- 3. Initialize ImGui ---
   ImGui::CreateContext();
   ImGuiIO &io = ImGui::GetIO();
-
-  // Disable saving/loading of imgui.ini
   io.IniFilename = NULL;
 
-  // Load custom font
   ImFont *Font = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/noto/NotoSans-Regular.ttf", 16.0f);
   if (Font) {
     io.FontDefault = Font;
@@ -147,88 +179,58 @@ void showUpdateGui() {
   ImGui_ImplGlfw_InitForOpenGL(Window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
 
-  // --- 4. Load Initial Update List ---
   std::string InitialUpdateList = readFile("/tmp/updates_list");
 
-  // --- 5. GUI State Variables ---
-  static std::string LiveOutputBuffer = ""; // Buffer for the live output
-  static std::unique_ptr<FILE, decltype(&pclose)> UpdatePipe(nullptr, pclose);
-  static bool UpdateRunning = false;  // Is the update in progress?
-  static bool UpdateFinished = false; // Has the update finished?
-  static int PipeFD = -1;             // File Descriptor of the output pipe
-
-  // Keep track of the temp file to ensure deletion
+  // --- GUI State & Threading ---
+  static std::string LiveOutputBuffer = "";
   static std::string CurrentTempFile = "";
+  static AsyncUpdateState UpdateState; // Shared state
 
-  // --- 6. Main Application Loop ---
   while (!glfwWindowShouldClose(Window)) {
     glfwPollEvents();
 
-    // --- 6a. Check for Live Output (Non-Blocking Read) ---
-    if (UpdatePipe) {
-      UpdateRunning = true;
-      std::array<char, 1024> TmpBuffer;
-      // Read from the pipe non-blockingly
-      ssize_t BytesRead = read(PipeFD, TmpBuffer.data(), TmpBuffer.size() - 1);
-
-      if (BytesRead > 0) {
-        // New data arrived
-        TmpBuffer[BytesRead] = '\0';
-        std::string RawChunk = TmpBuffer.data();
-
-        // 1. Regex to strip ANSI escape codes (colors, cursor movements, etc.)
-        // This removes [25l, [1E, colors, etc.
-        static const std::regex AnsiRegex(R"(\x1B\[[0-9;?]*[a-zA-Z])");
-        std::string CleanChunk = std::regex_replace(RawChunk, AnsiRegex, "");
-
-        // 2. Remove Carriage Returns (\r) and null bytes
-        std::erase(CleanChunk, '\r');
-        std::erase(CleanChunk, '\0');
-
-        LiveOutputBuffer += CleanChunk;
-
-      } else if (BytesRead == 0) {
-        // End-of-File (EOF) - The command has finished execution.
-        FILE *RawPipe = UpdatePipe.release();
-        int ExitStatus = pclose(RawPipe);
-
-        UpdateRunning = false;
-        UpdateFinished = true;
-
-        // Ensure temp file is deleted even if the shell command failed to do so
-        if (!CurrentTempFile.empty() && fs::exists(CurrentTempFile)) {
-          fs::remove(CurrentTempFile);
-          CurrentTempFile = "";
+    // --- Check for new data from the worker thread ---
+    if (UpdateState.IsRunning || UpdateState.IsFinished) {
+      std::string NewData;
+      {
+        // Quickly lock, grab data, and unlock to keep UI smooth
+        std::lock_guard<std::mutex> Lock(UpdateState.OutputMutex);
+        if (!UpdateState.PendingOutput.empty()) {
+          NewData = std::move(UpdateState.PendingOutput);
+          UpdateState.PendingOutput.clear(); // Clear after moving
         }
-
-        if (ExitStatus == 0) {
-          LiveOutputBuffer += "\n\n--- UPDATE FINISHED ---";
-        } else {
-          LiveOutputBuffer += "\n\n--- UPDATE FAILED ---";
-          LiveOutputBuffer += "\n(Exit Code: " + std::to_string(ExitStatus) + ")";
-          LiveOutputBuffer += "\nPossible causes: Wrong password or network issue.";
-        }
-      } else {
-        // Error or temporarily no data
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          LiveOutputBuffer += "\n\n--- ERROR READING PIPE ---";
-          UpdatePipe.reset();
-          UpdateRunning = false;
-          UpdateFinished = true;
-          // Fallback cleanup
-          if (!CurrentTempFile.empty() && fs::exists(CurrentTempFile)) {
-            fs::remove(CurrentTempFile);
-          }
-        }
+      }
+      if (!NewData.empty()) {
+        LiveOutputBuffer += NewData;
       }
     }
 
-    // --- 6b. Start new ImGui frame ---
+    // --- Check if finished ---
+    if (UpdateState.IsFinished) {
+      // Reset flag so we don't process this block multiple times
+      UpdateState.IsFinished = false;
+
+      // Cleanup temp file
+      if (!CurrentTempFile.empty() && fs::exists(CurrentTempFile)) {
+        fs::remove(CurrentTempFile);
+        CurrentTempFile = "";
+      }
+
+      int Code = UpdateState.ExitCode;
+      if (Code == 0) {
+        LiveOutputBuffer += "\n\n--- UPDATE FINISHED ---";
+      } else {
+        LiveOutputBuffer += "\n\n--- UPDATE FAILED ---";
+        LiveOutputBuffer += "\n(Exit Code: " + std::to_string(Code) + ")";
+        LiveOutputBuffer += "\nPossible causes: Wrong password or network issue.";
+      }
+    }
+
+    // --- Render Frame ---
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // --- 6c. Draw the UI ---
     {
       ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
       ImGui::SetNextWindowSize(io.DisplaySize);
@@ -238,7 +240,9 @@ void showUpdateGui() {
 
       static char Password[128] = "";
 
-      ImGui::BeginDisabled(UpdateRunning);
+      // Disable inputs if running
+      bool IsBusy = UpdateState.IsRunning;
+      ImGui::BeginDisabled(IsBusy);
 
       ImGui::Text("Password:");
       ImGui::SameLine();
@@ -248,57 +252,40 @@ void showUpdateGui() {
       ImGui::SameLine();
 
       if (ImGui::Button("Update")) {
-        if (!UpdateRunning) {
+        if (!IsBusy) {
           LiveOutputBuffer = InitialUpdateList;
-          UpdateRunning = true;
-          UpdateFinished = false;
+          LiveOutputBuffer += "\n\n--- STARTING UPDATE ---\n";
 
-          // 1. Generate a random temporary filename
+          // Generate Temp File
           std::random_device RD;
           std::mt19937 Gen(RD());
           std::uniform_int_distribution<> Dis(10000, 99999);
           CurrentTempFile = "/tmp/imupdate_pass_" + std::to_string(Dis(Gen));
 
-          // 2. Write password to the temp file securely
-          {
-            std::ofstream PassFile(CurrentTempFile);
-            if (PassFile.is_open()) {
-              PassFile << Password;
-              PassFile.close();
-              // Set permissions to 600 (Owner Read/Write ONLY) using C++17 filesystem
-              fs::permissions(CurrentTempFile, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace);
-            } else {
-              LiveOutputBuffer = "Error: Could not create temp password file.";
-              UpdateRunning = false;
-            }
-          }
+          std::ofstream PassFile(CurrentTempFile);
+          if (PassFile.is_open()) {
+            PassFile << Password;
+            PassFile.close();
+            fs::permissions(CurrentTempFile, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace);
 
-          if (UpdateRunning) {
-            // 3. Construct the command
-            // - script: provides fake TTY for sudo
-            // - sudo -S -v < file: Reads pass from file, validates credentials
-            // - rm file: deletes file immediately
-            // - paru ... --noprogressbar: Runs update without garbage output
+            // Construct Command
             std::string InnerCmd = "sudo -S -v < " + CurrentTempFile + " && rm " + CurrentTempFile +
                                    " && stdbuf -oL paru -Syu --noconfirm --color=never --noprogressbar 2>&1";
-
             std::string Cmd = "script -q -e -c \"" + InnerCmd + "\" /dev/null";
 
-            UpdatePipe.reset(popen(Cmd.c_str(), "r"));
+            // Reset State
+            UpdateState.ExitCode = 0;
+            UpdateState.IsFinished = false;
+            UpdateState.IsRunning = true;
+            UpdateState.PendingOutput.clear();
 
-            if (!UpdatePipe) {
-              LiveOutputBuffer += "Failed to execute command via popen().";
-              UpdateRunning = false;
-              // Cleanup if popen fails
-              if (fs::exists(CurrentTempFile))
-                fs::remove(CurrentTempFile);
-            } else {
-              PipeFD = fileno(UpdatePipe.get());
-              fcntl(PipeFD, F_SETFL, O_NONBLOCK);
+            // Launch Thread
+            std::thread(updateWorker, Cmd, &UpdateState).detach();
 
-              // Clear password from memory for better security
-              // memset(Password, 0, sizeof(Password));
-            }
+            // Clear password memory
+            // memset(Password, 0, sizeof(Password));
+          } else {
+            LiveOutputBuffer += "\nError: Could not create temp password file.";
           }
         }
       }
@@ -306,7 +293,6 @@ void showUpdateGui() {
 
       ImGui::SameLine();
       if (ImGui::Button("Close")) {
-        // Ensure cleanup on exit
         if (!CurrentTempFile.empty() && fs::exists(CurrentTempFile)) {
           fs::remove(CurrentTempFile);
         }
@@ -332,7 +318,6 @@ void showUpdateGui() {
       ImGui::End();
     }
 
-    // --- 6d. Render ---
     int DisplayW, DisplayH;
     glfwGetFramebufferSize(Window, &DisplayW, &DisplayH);
     glViewport(0, 0, DisplayW, DisplayH);
@@ -345,11 +330,12 @@ void showUpdateGui() {
     glfwSwapBuffers(Window);
   }
 
-  // --- 7. Cleanup ---
-  // Final safeguard cleanup
+  // Cleanup on exit
   if (!CurrentTempFile.empty() && fs::exists(CurrentTempFile)) {
     fs::remove(CurrentTempFile);
   }
+  // If thread is still running, detaching allows it to finish or be killed by OS.
+  // Ideally we would join, but detach is fine for simple exit.
 
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
@@ -359,18 +345,16 @@ void showUpdateGui() {
 }
 
 /**
- * @brief Main entry point for the program.
+ * @brief Main entry point.
  */
 int main() {
   const char *Env = getenv("BLOCK_BUTTON");
   int Button = 0;
-
   if (Env != nullptr) {
     Button = atoi(Env);
   }
 
   int Updates = 0;
-
   switch (Button) {
   case 2: // Middle click
     showUpdateGui();
@@ -378,11 +362,10 @@ int main() {
     Updates = getLineCount("/tmp/updates_list");
     std::cout << Updates << std::endl;
     break;
-  default: // Left click or i3blocks execution
+  default: // Left click or i3blocks
     checkUpdates();
     Updates = getLineCount("/tmp/updates_list");
     std::cout << Updates << std::endl;
   }
-
   return 0;
 }
