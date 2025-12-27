@@ -18,7 +18,8 @@ The application has two modes, triggered by the BLOCK\_BUTTON environment variab
    * It first loads and displays the list of updates from /tmp/updates\_list.  
    * It provides two buttons: "Update" and "Close".  
    * If you click **"Update"**:  
-     * It executes pkexec paru \-Syu 2\>&1 to run the full system upgrade.  
+     * It attempts to locate a graphical password prompt helper (like `x11-ssh-askpass`).
+     * It executes `sudo -A paru -Syu 2>&1` using the found helper to authenticate.  
      * It captures the live stdout and stderr from paru *as it runs*.  
      * It streams this live output directly into the ImGui window, so you can see the update progress in real-time without a separate terminal.  
      * The "Update" button is disabled while the process is running.  
@@ -32,6 +33,7 @@ To build and run this application, you need:
 * glfw-x11  
 * imgui  
 * paru  
+* x11-ssh-askpass (or a compatible `sudo -A` helper like `ssh-askpass`)
 * noto-fonts (the path /usr/share/fonts/noto/NotoSans-Regular.ttf is hardcoded).
 
 ## **Example i3blocks Configuration**

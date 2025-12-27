@@ -100,6 +100,28 @@ std::string readFile(const std::string &Filename) {
 }
 
 /**
+ * @brief Tries to find x11-ssh-askpass or compatible helper.
+ */
+std::string findAskPass() {
+  // 1. Try `which` to find it in PATH
+  std::string Path = executeCommand("which x11-ssh-askpass");
+  if (!Path.empty()) {
+    // Trim newline
+    Path.erase(Path.find_last_not_of(" \n\r\t") + 1);
+    if (fs::exists(Path))
+      return Path;
+  }
+
+  // 2. Check Arch Linux absolute path
+  std::string ArchPath = "/usr/lib/ssh/x11-ssh-askpass";
+  if (fs::exists(ArchPath)) {
+    return ArchPath;
+  }
+
+  return "";
+}
+
+/**
  * @brief Worker function that runs in a separate thread.
  * Handles the execution, reading, cleaning, and queuing of output.
  */
@@ -238,55 +260,38 @@ void showUpdateGui() {
                    ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
 
-      static char Password[128] = "";
-
       // Disable inputs if running
       bool IsBusy = UpdateState.IsRunning;
       ImGui::BeginDisabled(IsBusy);
-
-      ImGui::Text("Password:");
-      ImGui::SameLine();
-      ImGui::SetNextItemWidth(100);
-      ImGui::InputText("##password", Password, std::size(Password), ImGuiInputTextFlags_Password);
-
-      ImGui::SameLine();
 
       if (ImGui::Button("Update")) {
         if (!IsBusy) {
           LiveOutputBuffer = InitialUpdateList;
           LiveOutputBuffer += "\n\n--- STARTING UPDATE ---\n";
 
-          // Generate Temp File
-          std::random_device RD;
-          std::mt19937 Gen(RD());
-          std::uniform_int_distribution<> Dis(10000, 99999);
-          CurrentTempFile = "/tmp/imupdate_pass_" + std::to_string(Dis(Gen));
-
-          std::ofstream PassFile(CurrentTempFile);
-          if (PassFile.is_open()) {
-            PassFile << Password;
-            PassFile.close();
-            fs::permissions(CurrentTempFile, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace);
-
-            // Construct Command
-            std::string InnerCmd = "sudo -S -v < " + CurrentTempFile + " && rm " + CurrentTempFile +
-                                   " && stdbuf -oL paru -Syu --noconfirm --color=never --noprogressbar 2>&1";
-            std::string Cmd = "script -q -e -c \"" + InnerCmd + "\" /dev/null";
-
-            // Reset State
-            UpdateState.ExitCode = 0;
-            UpdateState.IsFinished = false;
-            UpdateState.IsRunning = true;
-            UpdateState.PendingOutput.clear();
-
-            // Launch Thread
-            std::thread(updateWorker, Cmd, &UpdateState).detach();
-
-            // Clear password memory
-            // memset(Password, 0, sizeof(Password));
+          std::string AskPassPath = findAskPass();
+          if (AskPassPath.empty()) {
+            LiveOutputBuffer += "Warning: x11-ssh-askpass not found. Sudo might fail if no helper is configured.\n";
+            // Fallback: hope SUDO_ASKPASS is set externally or sudo defaults to something
+            AskPassPath = "x11-ssh-askpass";
           } else {
-            LiveOutputBuffer += "\nError: Could not create temp password file.";
+            LiveOutputBuffer += "Using AskPass: " + AskPassPath + "\n";
           }
+
+          // Construct Command
+          std::string InnerCmd = "export SUDO_ASKPASS=" + AskPassPath +
+                                 " && sudo -A -v && "
+                                 "stdbuf -oL paru -Syyuu --noconfirm --color=never --noprogressbar 2>&1";
+          std::string Cmd = "script -q -e -c \"" + InnerCmd + "\" /dev/null";
+
+          // Reset State
+          UpdateState.ExitCode = 0;
+          UpdateState.IsFinished = false;
+          UpdateState.IsRunning = true;
+          UpdateState.PendingOutput.clear();
+
+          // Launch Thread
+          std::thread(updateWorker, Cmd, &UpdateState).detach();
         }
       }
       ImGui::EndDisabled();
