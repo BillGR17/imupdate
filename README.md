@@ -1,6 +1,6 @@
-# ArchUpdater
+# imupdate
 
-ArchUpdater is a graphical utility for managing system updates on **Arch Linux**. Built with C++23 and Dear ImGui, it provides a user-friendly interface to check for available updates using `checkupdates` and `paru`, visualize the list of packages, and execute the update process securely.
+imupdate is a graphical utility for managing system updates on **Arch Linux**. Built with C++23 and Dear ImGui, it provides a user-friendly interface to check for available updates using `checkupdates` and `paru`, visualize the list of packages, and execute the update process securely.
 
 ## Features
 
