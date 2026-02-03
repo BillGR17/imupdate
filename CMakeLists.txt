@@ -4,14 +4,19 @@ project(ArchUpdater LANGUAGES CXX)
 
 # --- Configuration ---
 
-# Use C++ 20 standard
-set(CMAKE_CXX_STANDARD 20)
+# Use C++ 23 standard
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Set compilers to Clang (as requested)
 set(CMAKE_CXX_COMPILER "clang++")
 set(CMAKE_C_COMPILER "clang")
+
+# Set default build type to Release if not specified
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
 
 # Set output directory for executable (build/bin/)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
@@ -27,7 +32,7 @@ include(FetchContent)
 FetchContent_Declare(
   imgui
   GIT_REPOSITORY https://github.com/ocornut/imgui.git
-  GIT_TAG v1.92.4
+  GIT_TAG v1.92.5
 )
 FetchContent_MakeAvailable(imgui)
 
@@ -36,6 +41,9 @@ FetchContent_MakeAvailable(imgui)
 # Add our executable from the src/ directory
 add_executable(imupdate
   src/main.cpp
+  src/Utils.cpp
+  src/Updates.cpp
+  src/UI.cpp
 )
 
 # Add the ImGui source files directly to our target
