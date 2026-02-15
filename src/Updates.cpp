@@ -6,10 +6,10 @@
 #include <format>
 #include <filesystem>
 
-void checkUpdates() {
+void checkUpdates(bool Debug) {
   std::string UpdateList = "";
-  UpdateList += executeCommand("checkupdates");
-  UpdateList += executeCommand("paru -Qua");
+  UpdateList += executeCommand("checkupdates", Debug);
+  UpdateList += executeCommand("paru -Qua", Debug);
 
   // Remove ANSI color codes from the output
   static const std::regex AnsiRegex("\x1B\\[[0-9;]*[mK]");
@@ -17,7 +17,9 @@ void checkUpdates() {
 
   std::ofstream OutFile("/tmp/updates_list");
   if (!OutFile.is_open()) {
-    std::cerr << std::format("Error writing to {}\n", "/tmp/updates_list");
+    if (Debug) {
+      std::cerr << std::format("Error writing to {}\n", "/tmp/updates_list");
+    }
     exit(EXIT_FAILURE);
   }
   // Write the "clean" list to the file

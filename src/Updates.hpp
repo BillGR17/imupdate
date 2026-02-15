@@ -1,3 +1,3 @@
 #pragma once
 
-void checkUpdates();
+void checkUpdates(bool Debug = false);

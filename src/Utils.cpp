@@ -10,13 +10,19 @@
 
 namespace fs = std::filesystem;
 
-std::string executeCommand(const char *Cmd) {
+std::string executeCommand(const char *Cmd, bool Debug) {
   std::array<char, 128> Buffer;
   std::string Result = "";
+  std::string Command = Cmd;
+  if (!Debug) {
+    Command += " 2>/dev/null";
+  }
   // Use popen to execute and open a read pipe
-  std::unique_ptr<FILE, PipeDeleter> Pipe(popen(Cmd, "r"));
+  std::unique_ptr<FILE, PipeDeleter> Pipe(popen(Command.c_str(), "r"));
   if (!Pipe) {
-    std::cerr << std::format("popen() failed for command: {}\n", Cmd);
+    if (Debug) {
+      std::cerr << std::format("popen() failed for command: {}\n", Cmd);
+    }
     return "";
   }
   // Read the output chunk by chunk
