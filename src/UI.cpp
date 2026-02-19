@@ -154,11 +154,11 @@ void showUpdateGui() {
       ImGui::Text("Password:");
       ImGui::SameLine();
       ImGui::SetNextItemWidth(100);
-      ImGui::InputText("##password", Password, std::size(Password), ImGuiInputTextFlags_Password);
+      bool EnterPressed = ImGui::InputText("##password", Password, std::size(Password), ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
 
       ImGui::SameLine();
 
-      if (ImGui::Button("Update")) {
+      if (ImGui::Button("Update") || EnterPressed) {
         if (!UpdateRunning) {
           LiveOutputBuffer = InitialUpdateList;
           UpdateRunning = true;
