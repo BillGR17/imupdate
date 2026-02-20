@@ -154,7 +154,8 @@ void showUpdateGui() {
       ImGui::Text("Password:");
       ImGui::SameLine();
       ImGui::SetNextItemWidth(100);
-      bool EnterPressed = ImGui::InputText("##password", Password, std::size(Password), ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
+      bool EnterPressed =
+          ImGui::InputText("##password", Password, std::size(Password), ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
 
       ImGui::SameLine();
 
@@ -228,17 +229,13 @@ void showUpdateGui() {
       ImGui::Separator();
       ImGui::Text("Output:");
 
-      ImGui::BeginChild("OutputRegion", ImVec2(0, 0), true, ImGuiWindowFlags_HorizontalScrollbar);
+      ImGui::BeginChild("OutputRegion", ImVec2(0, 0), true, ImGuiWindowFlags_None);
 
-      if (LiveOutputBuffer.empty()) {
-        ImGui::TextUnformatted(InitialUpdateList.c_str());
-      } else {
-        ImGui::TextUnformatted(LiveOutputBuffer.c_str());
-      }
-
-      if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
-        ImGui::SetScrollHereY(1.0f);
-      }
+      const std::string &OutputText = LiveOutputBuffer.empty() ? InitialUpdateList : LiveOutputBuffer;
+      ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0, 0, 0, 0));
+      ImGui::InputTextMultiline("##OutputText", const_cast<char *>(OutputText.c_str()), OutputText.size() + 1, ImVec2(-1.0f, -1.0f),
+                                ImGuiInputTextFlags_ReadOnly);
+      ImGui::PopStyleColor();
 
       ImGui::EndChild();
       ImGui::End();
