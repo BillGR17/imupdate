@@ -172,13 +172,13 @@ void showUpdateGui() {
           std::uniform_int_distribution<> Dis(10000, 99999);
           CurrentTempFile = std::format("/tmp/imupdate_pass_{}", Dis(Gen));
 
-          // 2. Write password to the temp file securely
+          // 2. Write askpass script to the temp file securely
           {
             std::ofstream PassFile(CurrentTempFile);
             if (PassFile.is_open()) {
-              // Use cat with heredoc to prevent shell expansion of special characters in the password
               // This is an executable script that SUDO_ASKPASS will run
-              PassFile << "#!/bin/sh\ncat <<'EOF'\n" << Password << "\nEOF\n";
+              // It reads the password from the IMUPDATE_PASS environment variable
+              PassFile << "#!/bin/sh\nprintf '%s\\n' \"$IMUPDATE_PASS\"\n";
               PassFile.close();
               // Set permissions to 700 (Owner Read/Write/Execute ONLY)
               fs::permissions(CurrentTempFile, fs::perms::owner_all, fs::perm_options::replace);
@@ -189,6 +189,9 @@ void showUpdateGui() {
           }
 
           if (UpdateRunning) {
+            // Set the password as an environment variable before popen
+            setenv("IMUPDATE_PASS", Password, 1);
+
             // 3. Construct the command
             // - export SUDO_ASKPASS: sets the helper
             // - sudo -A -v: refreshes credentials using the helper
@@ -199,6 +202,9 @@ void showUpdateGui() {
                                           CurrentTempFile);
 
             UpdatePipe.reset(popen(Cmd.c_str(), "r"));
+
+            // Clear the environment variable now that the child process has been spawned
+            unsetenv("IMUPDATE_PASS");
 
             if (!UpdatePipe) {
               LiveOutputBuffer += "Failed to execute command via popen().";
@@ -230,13 +236,21 @@ void showUpdateGui() {
       ImGui::Separator();
       ImGui::Text("Output:");
 
-      ImGui::BeginChild("OutputRegion", ImVec2(0, 0), true, ImGuiWindowFlags_None);
+      ImGui::BeginChild("OutputRegion", ImVec2(0, 0), true, ImGuiWindowFlags_HorizontalScrollbar);
+
+      static bool AutoScroll = true;
+      if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f) {
+        AutoScroll = true;
+      } else {
+        AutoScroll = false;
+      }
 
       const std::string &OutputText = LiveOutputBuffer.empty() ? InitialUpdateList : LiveOutputBuffer;
-      ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0, 0, 0, 0));
-      ImGui::InputTextMultiline("##OutputText", const_cast<char *>(OutputText.c_str()), OutputText.size() + 1, ImVec2(-1.0f, -1.0f),
-                                ImGuiInputTextFlags_ReadOnly);
-      ImGui::PopStyleColor();
+      ImGui::TextUnformatted(OutputText.c_str());
+
+      if (AutoScroll) {
+        ImGui::SetScrollHereY(1.0f);
+      }
 
       ImGui::EndChild();
       ImGui::End();
