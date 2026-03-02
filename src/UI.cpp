@@ -234,6 +234,7 @@ void showUpdateGui() {
       }
 
       ImGui::Separator();
+      ImGui::AlignTextToFramePadding();
       ImGui::Text("Output:");
 
       ImGui::BeginChild("OutputRegion", ImVec2(0, 0), true, ImGuiWindowFlags_HorizontalScrollbar);
@@ -246,7 +247,15 @@ void showUpdateGui() {
       }
 
       const std::string &OutputText = LiveOutputBuffer.empty() ? InitialUpdateList : LiveOutputBuffer;
-      ImGui::TextUnformatted(OutputText.c_str());
+
+      ImVec2 textSize = ImGui::CalcTextSize(OutputText.c_str());
+      float width = std::max(ImGui::GetContentRegionAvail().x, textSize.x);
+
+      ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0, 0, 0, 0)); // Transparent background
+      ImGui::InputTextMultiline("##text", const_cast<char *>(OutputText.c_str()), OutputText.size() + 1,
+                                ImVec2(width, textSize.y + ImGui::GetTextLineHeight() * 2),
+                                ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoHorizontalScroll);
+      ImGui::PopStyleColor();
 
       if (AutoScroll) {
         ImGui::SetScrollHereY(1.0f);
