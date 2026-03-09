@@ -67,7 +67,6 @@ void showUpdateGui() {
   static std::string LiveOutputBuffer = ""; // Buffer for the live output
   static std::unique_ptr<FILE, PipeDeleter> UpdatePipe(nullptr);
   static bool UpdateRunning = false;  // Is the update in progress?
-  static bool UpdateFinished = false; // Has the update finished?
   static int PipeFD = -1;             // File Descriptor of the output pipe
 
   // Keep track of the temp file to ensure deletion
@@ -106,7 +105,6 @@ void showUpdateGui() {
         int ExitStatus = pclose(RawPipe);
 
         UpdateRunning = false;
-        UpdateFinished = true;
 
         // Ensure temp file is deleted even if the shell command failed to do so
         if (!CurrentTempFile.empty() && fs::exists(CurrentTempFile)) {
@@ -126,7 +124,6 @@ void showUpdateGui() {
           LiveOutputBuffer += "\n\n--- ERROR READING PIPE ---";
           UpdatePipe.reset();
           UpdateRunning = false;
-          UpdateFinished = true;
           // Fallback cleanup
           if (!CurrentTempFile.empty() && fs::exists(CurrentTempFile)) {
             fs::remove(CurrentTempFile);
@@ -164,7 +161,6 @@ void showUpdateGui() {
         if (!UpdateRunning) {
           LiveOutputBuffer = InitialUpdateList;
           UpdateRunning = true;
-          UpdateFinished = false;
 
           // 1. Generate a random temporary filename
           std::random_device RD;
