@@ -280,10 +280,11 @@ void showUpdateGui(bool runInTray) {
             // 3. Construct the command
             // - export SUDO_ASKPASS: sets the helper
             // - sudo -A -v: refreshes credentials using the helper
+            // - rm -f {}.used: allow the helper to run again for paru, since paru might allocate a PTY and bypass sudo cache
             // - paru ...: runs the update
             // Note: We do NOT delete the file here immediately. Cleanup happens on exit or next run.
-            std::string Cmd = std::format("export SUDO_ASKPASS={} && sudo -A -v && stdbuf -oL paru -Syu --noconfirm "
-                                          "--color=never --noprogressbar 2>&1",
+            std::string Cmd = std::format("{{ export SUDO_ASKPASS={0} && sudo -A -v && rm -f {0}.used && stdbuf -oL paru -Syu --noconfirm "
+                                          "--color=never --noprogressbar; }} 2>&1",
                                           CurrentTempFile);
 
             UpdatePipe.reset(popen(Cmd.c_str(), "r"));
