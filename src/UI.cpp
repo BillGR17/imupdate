@@ -107,8 +107,11 @@ void showUpdateGui() {
         UpdateRunning = false;
 
         // Ensure temp file is deleted even if the shell command failed to do so
-        if (!CurrentTempFile.empty() && fs::exists(CurrentTempFile)) {
-          fs::remove(CurrentTempFile);
+        // Ensure temp file and token are deleted even if the shell command failed to do so
+        if (!CurrentTempFile.empty()) {
+          if (fs::exists(CurrentTempFile)) fs::remove(CurrentTempFile);
+          std::string UsedFile = CurrentTempFile + ".used";
+          if (fs::exists(UsedFile)) fs::remove(UsedFile);
           CurrentTempFile = "";
         }
 
@@ -125,8 +128,10 @@ void showUpdateGui() {
           UpdatePipe.reset();
           UpdateRunning = false;
           // Fallback cleanup
-          if (!CurrentTempFile.empty() && fs::exists(CurrentTempFile)) {
-            fs::remove(CurrentTempFile);
+          if (!CurrentTempFile.empty()) {
+            if (fs::exists(CurrentTempFile)) fs::remove(CurrentTempFile);
+            std::string UsedFile = CurrentTempFile + ".used";
+            if (fs::exists(UsedFile)) fs::remove(UsedFile);
           }
         }
       }
@@ -174,7 +179,12 @@ void showUpdateGui() {
             if (PassFile.is_open()) {
               // This is an executable script that SUDO_ASKPASS will run
               // It reads the password from the IMUPDATE_PASS environment variable
-              PassFile << "#!/bin/sh\nprintf '%s\\n' \"$IMUPDATE_PASS\"\n";
+              // It also checks for a .used file to ensure it only runs once, avoiding sudo lockouts
+              PassFile << std::format("#!/bin/sh\n"
+                                      "if [ -f \"{0}.used\" ]; then exit 1; fi\n"
+                                      "touch \"{0}.used\"\n"
+                                      "printf '%s\\n' \"$IMUPDATE_PASS\"\n",
+                                      CurrentTempFile);
               PassFile.close();
               // Set permissions to 700 (Owner Read/Write/Execute ONLY)
               fs::permissions(CurrentTempFile, fs::perms::owner_all, fs::perm_options::replace);
@@ -208,6 +218,9 @@ void showUpdateGui() {
               // Cleanup if popen fails
               if (fs::exists(CurrentTempFile))
                 fs::remove(CurrentTempFile);
+              std::string UsedFile = CurrentTempFile + ".used";
+              if (fs::exists(UsedFile))
+                fs::remove(UsedFile);
             } else {
               PipeFD = fileno(UpdatePipe.get());
               fcntl(PipeFD, F_SETFL, O_NONBLOCK);
@@ -223,8 +236,10 @@ void showUpdateGui() {
       ImGui::SameLine();
       if (ImGui::Button("Close")) {
         // Ensure cleanup on exit
-        if (!CurrentTempFile.empty() && fs::exists(CurrentTempFile)) {
-          fs::remove(CurrentTempFile);
+        if (!CurrentTempFile.empty()) {
+          if (fs::exists(CurrentTempFile)) fs::remove(CurrentTempFile);
+          std::string UsedFile = CurrentTempFile + ".used";
+          if (fs::exists(UsedFile)) fs::remove(UsedFile);
         }
         glfwSetWindowShouldClose(Window, true);
       }
@@ -276,8 +291,10 @@ void showUpdateGui() {
 
   // --- 7. Cleanup ---
   // Final safeguard cleanup
-  if (!CurrentTempFile.empty() && fs::exists(CurrentTempFile)) {
-    fs::remove(CurrentTempFile);
+  if (!CurrentTempFile.empty()) {
+    if (fs::exists(CurrentTempFile)) fs::remove(CurrentTempFile);
+    std::string UsedFile = CurrentTempFile + ".used";
+    if (fs::exists(UsedFile)) fs::remove(UsedFile);
   }
 
   ImGui_ImplOpenGL3_Shutdown();
