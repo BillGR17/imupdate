@@ -68,6 +68,19 @@ You can run the tool in CLI-only mode (though the main feature is the GUI) by pa
 ./imupdate -cli
 ```
 
+### System Tray Mode
+You can run the application minimized in the system tray using the `-tray` flag:
+
+```bash
+./imupdate -tray
+```
+
+When running in tray mode:
+- The UI window is initially hidden.
+- The tray icon displays a red/green circle indicating the number of pending updates.
+- **Left-Click** the tray icon to toggle the UI window visibility.
+- **Right-Click** the tray icon to open a menu with "Refresh" and "Close" options.
+
 ### In the GUI
 1.  Launch the application.
 2.  Review the list of updates in the "Output" section.

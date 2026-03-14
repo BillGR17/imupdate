@@ -9,6 +9,7 @@
 int main(int argc, char *argv[]) {
   bool showUi = true;
   bool debug = false;
+  bool runInTray = false;
 
   // Parse arguments
   for (int i = 1; i < argc; ++i) {
@@ -18,10 +19,13 @@ int main(int argc, char *argv[]) {
     if (std::string_view(argv[i]) == "-debug") {
       debug = true;
     }
+    if (std::string_view(argv[i]) == "-tray") {
+      runInTray = true;
+    }
   }
 
   if (showUi) {
-    showUpdateGui();
+    showUpdateGui(runInTray);
   }
 
   // Unconditionally check updates

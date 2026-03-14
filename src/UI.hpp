@@ -1,3 +1,3 @@
 #pragma once
 
-void showUpdateGui();
+void showUpdateGui(bool runInTray);

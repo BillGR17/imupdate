@@ -27,6 +27,10 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 find_package(glfw3 3.3 REQUIRED)
 find_package(OpenGL REQUIRED)
 
+# Find GTK3 for the system tray
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(TRAY REQUIRED gtk+-3.0)
+
 # 2. Fetch Dear ImGui using FetchContent
 include(FetchContent)
 FetchContent_Declare(
@@ -62,10 +66,14 @@ target_include_directories(imupdate PUBLIC
   ${imgui_SOURCE_DIR}
   ${imgui_SOURCE_DIR}/backends
   ${GLFW_INCLUDE_DIRS}
+  ${TRAY_INCLUDE_DIRS}
 )
 
 # Link libraries
 target_link_libraries(imupdate PRIVATE
   glfw
   OpenGL
+  ${TRAY_LIBRARIES}
 )
+
+target_compile_definitions(imupdate PRIVATE TRAY_APPINDICATOR=1)

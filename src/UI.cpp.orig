@@ -4,8 +4,6 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
-#include "tray.hpp"
-#include "Updates.hpp"
 
 #include <iostream>
 #include <format>
@@ -21,51 +19,7 @@
 
 namespace fs = std::filesystem;
 
-static GLFWwindow* g_Window = nullptr;
-static bool g_WindowVisible = true;
-static bool g_ShouldRefresh = false;
-static bool g_ShouldClose = false;
-static int g_UpdateCount = 0;
-
-void cb_toggle_ui(struct tray *tray) {
-  if (g_WindowVisible) {
-    glfwHideWindow(g_Window);
-    g_WindowVisible = false;
-  } else {
-    glfwShowWindow(g_Window);
-    g_WindowVisible = true;
-  }
-}
-
-void cb_refresh(struct tray_menu *item) {
-  g_ShouldRefresh = true;
-}
-
-void cb_close(struct tray_menu *item) {
-  g_ShouldClose = true;
-}
-
-static struct tray tray_struct = {
-    .icon = (char*)"/tmp/imupdate_icon.svg",
-    .menu =
-        (struct tray_menu[]){
-            {(char*)"Refresh", 0, 0, cb_refresh, NULL, NULL},
-            {(char*)"Close", 0, 0, cb_close, NULL, NULL},
-            {NULL, 0, 0, NULL, NULL, NULL}},
-    .cb = cb_toggle_ui
-};
-
-void updateTrayIcon(int count) {
-  std::ofstream out("/tmp/imupdate_icon.svg");
-  std::string color = count > 0 ? "red" : "green";
-  out << std::format(
-      R"(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="30" fill="{}" /><text x="32" y="44" font-size="34" font-family="sans-serif" font-weight="bold" fill="white" text-anchor="middle">{}</text></svg>)",
-      color, count);
-  out.close();
-  tray_update(&tray_struct);
-}
-
-void showUpdateGui(bool runInTray) {
+void showUpdateGui() {
   // --- 1. Initialize GLFW ---
   if (!glfwInit()) {
     std::cerr << "Failed to initialize GLFW" << std::endl;
@@ -88,8 +42,6 @@ void showUpdateGui(bool runInTray) {
   }
   glfwMakeContextCurrent(Window);
   glfwSwapInterval(1); // Enable VSync
-  g_Window = Window;
-  g_WindowVisible = !runInTray;
 
   // --- 3. Initialize ImGui ---
   ImGui::CreateContext();
@@ -120,40 +72,9 @@ void showUpdateGui(bool runInTray) {
   // Keep track of the temp file to ensure deletion
   static std::string CurrentTempFile = "";
 
-  if (runInTray) {
-    g_UpdateCount = getLineCount("/tmp/updates_list");
-    glfwHideWindow(Window);
-    g_WindowVisible = false;
-    tray_init(&tray_struct);
-    updateTrayIcon(g_UpdateCount);
-  }
-
   // --- 6. Main Application Loop ---
   while (!glfwWindowShouldClose(Window)) {
     glfwPollEvents();
-
-    if (runInTray) {
-      if (tray_loop(0) == -1) break; // Non-blocking tray loop
-    }
-
-    if (g_ShouldClose) {
-      break;
-    }
-
-    if (g_ShouldRefresh) {
-      g_ShouldRefresh = false;
-      checkUpdates(false);
-      InitialUpdateList = readFile("/tmp/updates_list");
-      LiveOutputBuffer = ""; // Reset live buffer to show new updates
-      g_UpdateCount = getLineCount("/tmp/updates_list");
-      updateTrayIcon(g_UpdateCount);
-    }
-
-    if (!g_WindowVisible) {
-      // Sleep a bit to prevent high CPU usage when hidden
-      usleep(16000); // ~60fps
-      continue;
-    }
 
     // --- 6a. Check for Live Output (Non-Blocking Read) ---
     if (UpdatePipe) {
@@ -320,12 +241,7 @@ void showUpdateGui(bool runInTray) {
           std::string UsedFile = CurrentTempFile + ".used";
           if (fs::exists(UsedFile)) fs::remove(UsedFile);
         }
-        if (runInTray) {
-            glfwHideWindow(Window);
-            g_WindowVisible = false;
-        } else {
-            glfwSetWindowShouldClose(Window, true);
-        }
+        glfwSetWindowShouldClose(Window, true);
       }
 
       ImGui::Separator();
@@ -379,10 +295,6 @@ void showUpdateGui(bool runInTray) {
     if (fs::exists(CurrentTempFile)) fs::remove(CurrentTempFile);
     std::string UsedFile = CurrentTempFile + ".used";
     if (fs::exists(UsedFile)) fs::remove(UsedFile);
-  }
-
-  if (runInTray) {
-      tray_exit();
   }
 
   ImGui_ImplOpenGL3_Shutdown();
