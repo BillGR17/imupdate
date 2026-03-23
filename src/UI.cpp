@@ -347,9 +347,16 @@ void showUpdateGui(bool runInTray) {
       ImVec2 textSize = ImGui::CalcTextSize(OutputText.c_str());
       float width = std::max(ImGui::GetContentRegionAvail().x, textSize.x);
 
+      int lineCount = 1;
+      for (char c : OutputText) {
+          if (c == '\n') lineCount++;
+      }
+      // Provide an exact exact matching height (a little extra space doesn't hurt but the exact is minimum needed to avoid scrollbar)
+      float calculatedHeight = lineCount * ImGui::GetTextLineHeight() + ImGui::GetStyle().FramePadding.y * 2.0f + ImGui::GetTextLineHeight();
+
       ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0, 0, 0, 0)); // Transparent background
       ImGui::InputTextMultiline("##text", const_cast<char *>(OutputText.c_str()), OutputText.size() + 1,
-                                ImVec2(width, textSize.y + ImGui::GetTextLineHeight() * 2),
+                                ImVec2(width, calculatedHeight),
                                 ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoHorizontalScroll);
       ImGui::PopStyleColor();
 
