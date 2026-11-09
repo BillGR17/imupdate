@@ -1,5 +1,11 @@
 # Set minimum version and project details
 cmake_minimum_required(VERSION 3.16)
+
+# Set compilers to Clang (as requested). This must be set before project()
+# because project() runs compiler detection and ignores any compiler set after it.
+set(CMAKE_CXX_COMPILER "clang++")
+set(CMAKE_C_COMPILER "clang")
+
 project(ArchUpdater LANGUAGES CXX)
 
 # --- Configuration ---
@@ -8,10 +14,6 @@ project(ArchUpdater LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 set(CMAKE_CXX_EXTENSIONS OFF)
-
-# Set compilers to Clang (as requested)
-set(CMAKE_CXX_COMPILER "clang++")
-set(CMAKE_C_COMPILER "clang")
 
 # Set default build type to Release if not specified
 if(NOT CMAKE_BUILD_TYPE)
@@ -27,9 +29,12 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 find_package(glfw3 3.3 REQUIRED)
 find_package(OpenGL REQUIRED)
 
-# Find GTK3 for the system tray
+# Find GTK3 + libayatana-appindicator for the system tray.
+# libayatana-appindicator implements StatusNotifierItem (SNI) over D-Bus,
+# which is the only tray protocol that works on Wayland (Hyprland + Waybar).
+# Plain GtkStatusIcon is X11-only.
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(TRAY REQUIRED gtk+-3.0)
+pkg_check_modules(TRAY REQUIRED ayatana-appindicator3-0.1 gtk+-3.0)
 
 # 2. Fetch Dear ImGui using FetchContent
 include(FetchContent)

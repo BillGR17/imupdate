@@ -24,12 +24,13 @@ int main(int argc, char *argv[]) {
     }
   }
 
+  // Check updates before opening the GUI so the UI and tray icon show fresh data
+  checkUpdates(debug);
+
   if (showUi) {
     showUpdateGui(runInTray);
   }
 
-  // Unconditionally check updates
-  checkUpdates(debug);
   int Updates = getLineCount("/tmp/updates_list");
   std::cout << Updates << std::endl;
 

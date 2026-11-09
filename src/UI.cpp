@@ -45,8 +45,12 @@ void cb_close(struct tray_menu *item) {
   g_ShouldClose = true;
 }
 
+// Tray apps (e.g. Waybar) cache icons by name and only reload when the
+// IconName changes, so we emit a unique filename per state.
+static std::string g_IconPath = "/tmp/imupdate_icon_0.svg";
+
 static struct tray tray_struct = {
-    .icon = (char*)"/tmp/imupdate_icon.svg",
+    .icon = (char*)g_IconPath.c_str(),
     .menu =
         (struct tray_menu[]){
             {(char*)"Refresh", 0, 0, cb_refresh, NULL, NULL},
@@ -56,12 +60,25 @@ static struct tray tray_struct = {
 };
 
 void updateTrayIcon(int count) {
-  std::ofstream out("/tmp/imupdate_icon.svg");
+  g_IconPath = std::format("/tmp/imupdate_icon_{}.svg", count);
+  std::ofstream out(g_IconPath);
   std::string color = count > 0 ? "red" : "green";
   out << std::format(
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="30" fill="{}" /><text x="32" y="44" font-size="34" font-family="sans-serif" font-weight="bold" fill="white" text-anchor="middle">{}</text></svg>)",
       color, count);
   out.close();
+
+  // Clean up previously generated icons (they are no longer referenced).
+  for (auto &entry : fs::directory_iterator("/tmp")) {
+    if (entry.is_regular_file() && entry.path().string().find("imupdate_icon_") != std::string::npos) {
+      if (entry.path() != fs::path(g_IconPath)) {
+        std::error_code ec;
+        fs::remove(entry.path(), ec);
+      }
+    }
+  }
+
+  tray_struct.icon = const_cast<char *>(g_IconPath.c_str());
   tray_update(&tray_struct);
 }
 
@@ -146,74 +163,80 @@ void showUpdateGui(bool runInTray) {
       InitialUpdateList = readFile("/tmp/updates_list");
       LiveOutputBuffer = ""; // Reset live buffer to show new updates
       g_UpdateCount = getLineCount("/tmp/updates_list");
-      updateTrayIcon(g_UpdateCount);
+      if (runInTray) updateTrayIcon(g_UpdateCount);
+    }
+
+    // --- 6a. Check for Live Output (Non-Blocking Read) ---
+    // Drain the pipe every frame regardless of window visibility, so a running
+    // update can never block on a full pipe buffer while the window is hidden.
+    if (UpdatePipe) {
+      UpdateRunning = true;
+      bool PipeDone = false;
+      while (!PipeDone) {
+        std::array<char, 4096> TmpBuffer;
+        // Read from the pipe non-blockingly
+        ssize_t BytesRead = read(PipeFD, TmpBuffer.data(), TmpBuffer.size() - 1);
+
+        if (BytesRead > 0) {
+          // New data arrived. Keep reading until the pipe is drained (EAGAIN) or hits EOF.
+          TmpBuffer[BytesRead] = '\0';
+          std::string RawChunk = TmpBuffer.data();
+
+          // 1. Regex to strip ANSI escape codes (colors, cursor movements, etc.)
+          // This removes [25l, [1E, colors, etc.
+          static const std::regex AnsiRegex(R"(\x1B\[[0-9;?]*[a-zA-Z])");
+          std::string CleanChunk = std::regex_replace(RawChunk, AnsiRegex, "");
+
+          // 2. Remove Carriage Returns (\r) and null bytes
+          std::erase(CleanChunk, '\r');
+          std::erase(CleanChunk, '\0');
+
+          LiveOutputBuffer += CleanChunk;
+
+        } else if (BytesRead == 0) {
+          // End-of-File (EOF) - The command has finished execution.
+          FILE *RawPipe = UpdatePipe.release();
+          int ExitStatus = pclose(RawPipe);
+
+          UpdateRunning = false;
+
+          // Ensure temp file and token are deleted even if the shell command failed to do so
+          if (!CurrentTempFile.empty()) {
+            if (fs::exists(CurrentTempFile)) fs::remove(CurrentTempFile);
+            std::string UsedFile = CurrentTempFile + ".used";
+            if (fs::exists(UsedFile)) fs::remove(UsedFile);
+            CurrentTempFile = "";
+          }
+
+          if (ExitStatus == 0) {
+            LiveOutputBuffer += "\n\n--- UPDATE FINISHED ---";
+          } else {
+            LiveOutputBuffer +=
+                std::format("\n\n--- UPDATE FAILED ---\n(Exit Code: {})\nPossible causes: Wrong password or network issue.", ExitStatus);
+          }
+          PipeDone = true;
+        } else {
+          // Error or temporarily no data
+          if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            LiveOutputBuffer += "\n\n--- ERROR READING PIPE ---";
+            UpdatePipe.reset();
+            UpdateRunning = false;
+            // Fallback cleanup
+            if (!CurrentTempFile.empty()) {
+              if (fs::exists(CurrentTempFile)) fs::remove(CurrentTempFile);
+              std::string UsedFile = CurrentTempFile + ".used";
+              if (fs::exists(UsedFile)) fs::remove(UsedFile);
+            }
+          }
+          PipeDone = true;
+        }
+      }
     }
 
     if (!g_WindowVisible) {
       // Sleep a bit to prevent high CPU usage when hidden
       usleep(16000); // ~60fps
       continue;
-    }
-
-    // --- 6a. Check for Live Output (Non-Blocking Read) ---
-    if (UpdatePipe) {
-      UpdateRunning = true;
-      std::array<char, 1024> TmpBuffer;
-      // Read from the pipe non-blockingly
-      ssize_t BytesRead = read(PipeFD, TmpBuffer.data(), TmpBuffer.size() - 1);
-
-      if (BytesRead > 0) {
-        // New data arrived
-        TmpBuffer[BytesRead] = '\0';
-        std::string RawChunk = TmpBuffer.data();
-
-        // 1. Regex to strip ANSI escape codes (colors, cursor movements, etc.)
-        // This removes [25l, [1E, colors, etc.
-        static const std::regex AnsiRegex(R"(\x1B\[[0-9;?]*[a-zA-Z])");
-        std::string CleanChunk = std::regex_replace(RawChunk, AnsiRegex, "");
-
-        // 2. Remove Carriage Returns (\r) and null bytes
-        std::erase(CleanChunk, '\r');
-        std::erase(CleanChunk, '\0');
-
-        LiveOutputBuffer += CleanChunk;
-
-      } else if (BytesRead == 0) {
-        // End-of-File (EOF) - The command has finished execution.
-        FILE *RawPipe = UpdatePipe.release();
-        int ExitStatus = pclose(RawPipe);
-
-        UpdateRunning = false;
-
-        // Ensure temp file is deleted even if the shell command failed to do so
-        // Ensure temp file and token are deleted even if the shell command failed to do so
-        if (!CurrentTempFile.empty()) {
-          if (fs::exists(CurrentTempFile)) fs::remove(CurrentTempFile);
-          std::string UsedFile = CurrentTempFile + ".used";
-          if (fs::exists(UsedFile)) fs::remove(UsedFile);
-          CurrentTempFile = "";
-        }
-
-        if (ExitStatus == 0) {
-          LiveOutputBuffer += "\n\n--- UPDATE FINISHED ---";
-        } else {
-          LiveOutputBuffer +=
-              std::format("\n\n--- UPDATE FAILED ---\n(Exit Code: {})\nPossible causes: Wrong password or network issue.", ExitStatus);
-        }
-      } else {
-        // Error or temporarily no data
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-          LiveOutputBuffer += "\n\n--- ERROR READING PIPE ---";
-          UpdatePipe.reset();
-          UpdateRunning = false;
-          // Fallback cleanup
-          if (!CurrentTempFile.empty()) {
-            if (fs::exists(CurrentTempFile)) fs::remove(CurrentTempFile);
-            std::string UsedFile = CurrentTempFile + ".used";
-            if (fs::exists(UsedFile)) fs::remove(UsedFile);
-          }
-        }
-      }
     }
 
     // --- 6b. Start new ImGui frame ---

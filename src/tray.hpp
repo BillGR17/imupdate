@@ -26,9 +26,18 @@ static void tray_update(struct tray *tray);
 
 #include <gtk/gtk.h>
 
-#define TRAY_APPINDICATOR_ID "tray-id"
+// This library is deprecated in favor of libayatana-appindicator-glib, but it
+// is the only one installed and fully functional on this system.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#include <libayatana-appindicator/app-indicator.h>
 
-static GtkStatusIcon *indicator = NULL;
+// libayatana-appindicator publishes the icon over D-Bus (StatusNotifierItem),
+// which works on both Wayland (Hyprland, Waybar, ...) and X11 with an SNI host.
+// The old GtkStatusIcon approach only works with the X11 XEmbed tray protocol.
+#define TRAY_APPINDICATOR_ID "imupdate"
+
+static AppIndicator *indicator = NULL;
 static int loop_result = 0;
 
 static void _tray_menu_cb(GtkMenuItem *item, gpointer data) {
@@ -62,21 +71,14 @@ static GtkMenuShell *_tray_menu(struct tray_menu *m) {
   return menu;
 }
 
-static void tray_icon_activate(GtkStatusIcon *status_icon, gpointer user_data) {
+static void tray_icon_activate(AppIndicator *indicator, gint x, gint y,
+                               gpointer user_data) {
+  (void)indicator;
+  (void)x;
+  (void)y;
   struct tray *tray = (struct tray *)user_data;
   if (tray->cb != NULL) {
     tray->cb(tray);
-  }
-}
-
-static void tray_icon_popup_menu(GtkStatusIcon *status_icon, guint button,
-                                 guint32 activate_time, gpointer user_data) {
-  struct tray *tray = (struct tray *)user_data;
-  if (tray->menu != NULL) {
-    GtkMenu *menu = GTK_MENU(_tray_menu(tray->menu));
-    gtk_widget_show_all(GTK_WIDGET(menu));
-    gtk_menu_popup(menu, NULL, NULL, gtk_status_icon_position_menu, status_icon,
-                   button, activate_time);
   }
 }
 
@@ -84,10 +86,19 @@ static int tray_init(struct tray *tray) {
   if (gtk_init_check(0, NULL) == FALSE) {
     return -1;
   }
-  indicator = gtk_status_icon_new_from_file(tray->icon);
+  indicator =
+      app_indicator_new(TRAY_APPINDICATOR_ID, tray->icon,
+                        APP_INDICATOR_CATEGORY_APPLICATION_STATUS);
+  if (indicator == NULL) {
+    return -1;
+  }
+  app_indicator_set_title(indicator, "Update Manager");
+  // The menu is registered via dbusmenu; the tray host (e.g. Waybar) renders
+  // it itself on right-click, so no local popup is needed.
+  app_indicator_set_menu(indicator, GTK_MENU(_tray_menu(tray->menu)));
+  app_indicator_set_icon_full(indicator, tray->icon, "");
   g_signal_connect(indicator, "activate", G_CALLBACK(tray_icon_activate), tray);
-  g_signal_connect(indicator, "popup-menu", G_CALLBACK(tray_icon_popup_menu), tray);
-  gtk_status_icon_set_visible(indicator, TRUE);
+  app_indicator_set_status(indicator, APP_INDICATOR_STATUS_ACTIVE);
   return 0;
 }
 
@@ -97,10 +108,12 @@ static int tray_loop(int blocking) {
 }
 
 static void tray_update(struct tray *tray) {
-  gtk_status_icon_set_from_file(indicator, tray->icon);
+  app_indicator_set_icon_full(indicator, tray->icon, "");
 }
 
 static void tray_exit() { loop_result = -1; }
+
+#pragma GCC diagnostic pop
 
 #elif defined(TRAY_APPKIT)
 
