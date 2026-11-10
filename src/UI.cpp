@@ -27,7 +27,7 @@ static bool g_ShouldRefresh = false;
 static bool g_ShouldClose = false;
 static int g_UpdateCount = 0;
 
-void cb_toggle_ui(struct tray *tray) {
+static void toggle_window() {
   if (g_WindowVisible) {
     glfwHideWindow(g_Window);
     g_WindowVisible = false;
@@ -36,6 +36,10 @@ void cb_toggle_ui(struct tray *tray) {
     g_WindowVisible = true;
   }
 }
+
+void cb_toggle_ui(struct tray *tray) { toggle_window(); }
+
+void cb_toggle(struct tray_menu *item) { toggle_window(); }
 
 void cb_refresh(struct tray_menu *item) {
   g_ShouldRefresh = true;
@@ -53,6 +57,8 @@ static struct tray tray_struct = {
     .icon = (char*)g_IconPath.c_str(),
     .menu =
         (struct tray_menu[]){
+            {(char*)"Toggle Window", 0, 0, cb_toggle, NULL, NULL},
+            {(char*)"-", 0, 0, NULL, NULL, NULL},
             {(char*)"Refresh", 0, 0, cb_refresh, NULL, NULL},
             {(char*)"Close", 0, 0, cb_close, NULL, NULL},
             {NULL, 0, 0, NULL, NULL, NULL}},
