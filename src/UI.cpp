@@ -18,6 +18,7 @@
 #include <memory>
 #include <array>
 #include <cstring>
+#include <chrono>
 
 namespace fs = std::filesystem;
 
@@ -152,6 +153,10 @@ void showUpdateGui(bool runInTray) {
   }
 
   // --- 6. Main Application Loop ---
+  // Auto-refresh the update list every 30 minutes.
+  auto LastAutoRefresh = std::chrono::steady_clock::now();
+  const auto AutoRefreshInterval = std::chrono::minutes(30);
+
   while (!glfwWindowShouldClose(Window)) {
     glfwPollEvents();
 
@@ -161,6 +166,13 @@ void showUpdateGui(bool runInTray) {
 
     if (g_ShouldClose) {
       break;
+    }
+
+    // Schedule an automatic refresh once the interval has elapsed.
+    // Skip it while an update is running so the live output is not cleared.
+    if (!UpdateRunning && std::chrono::steady_clock::now() - LastAutoRefresh >= AutoRefreshInterval) {
+      LastAutoRefresh = std::chrono::steady_clock::now();
+      g_ShouldRefresh = true;
     }
 
     if (g_ShouldRefresh) {
