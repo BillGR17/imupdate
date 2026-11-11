@@ -68,6 +68,7 @@ target_sources(imupdate PRIVATE
 # Include directories
 target_include_directories(imupdate PUBLIC
   src
+  src/include
   ${imgui_SOURCE_DIR}
   ${imgui_SOURCE_DIR}/backends
   ${GLFW_INCLUDE_DIRS}
